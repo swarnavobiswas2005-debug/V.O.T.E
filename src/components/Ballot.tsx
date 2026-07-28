@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, sha256 } from '../supabase';
+import { supabase } from '../supabase';
 import type { Candidate, Voter } from '../supabase';
+import { castBallotOnChain } from '../solana';
 import { 
   Check, Lock, Download, Loader2, ShieldCheck, 
   AlertTriangle, User, ArrowRight 
@@ -67,11 +68,19 @@ export const Ballot: React.FC<BallotProps> = ({ voter, ghostMode = false, onVote
 
     try {
       const timestamp = new Date().toISOString();
-      const randomBlock = Math.floor(2841030 + Math.random() * 50000);
-      const rawTxHash = await sha256(`${voter.id}-${selectedCandidate.id}-${randomBlock}-${timestamp}`);
-      const txHash = '0x' + rawTxHash;
-      
       const voterIdHash = voter.document_hash;
+
+      // Submit ballot to on-chain Solana ledger
+      const chainResult = await castBallotOnChain(
+        selectedCandidate.id,
+        selectedCandidate.political_party,
+        selectedCandidate.vidhan_sabha,
+        selectedCandidate.rajya_sabha,
+        voterIdHash
+      );
+
+      const txHash = chainResult.txHash;
+      const blockHeight = chainResult.blockHeight;
 
       // 1. Write ANONYMOUS vote to ledger
       const { error: voteErr } = await supabase
@@ -82,7 +91,7 @@ export const Ballot: React.FC<BallotProps> = ({ voter, ghostMode = false, onVote
           vidhan_sabha: selectedCandidate.vidhan_sabha,
           rajya_sabha: selectedCandidate.rajya_sabha,
           transaction_hash: txHash,
-          block_height: randomBlock
+          block_height: blockHeight
         });
 
       if (voteErr) throw voteErr;
@@ -100,13 +109,13 @@ export const Ballot: React.FC<BallotProps> = ({ voter, ghostMode = false, onVote
         .from('audit_logs')
         .insert({
           event: 'BALLOT_CAST_SUCCESS',
-          details: `Anonymous ballot registered. Block height: ${randomBlock}.`,
+          details: `Anonymous ballot registered on Solana (${chainResult.status}). Block slot: ${blockHeight}.`,
           block_hash: txHash
         });
 
       setReceiptDetails({
         txHash,
-        blockHeight: randomBlock,
+        blockHeight,
         timestamp,
         voterHash: voterIdHash
       });
